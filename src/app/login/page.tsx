@@ -150,6 +150,16 @@ export default function LoginPage() {
               </div>
             </div>
 
+            {/* Forgot password */}
+            <div className="text-end">
+              <Link
+                href="/forgot-password"
+                className="text-xs text-indigo-400 hover:text-indigo-300"
+              >
+                {isAr ? 'نسيت كلمة المرور؟' : 'Forgot password?'}
+              </Link>
+            </div>
+
             {/* Error */}
             {error && (
               <div className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-300 ring-1 ring-red-500/20">

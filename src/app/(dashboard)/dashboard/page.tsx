@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   FileText,
   BarChart3,
+  ClipboardList,
+  ShieldAlert,
   CheckCircle2,
   Circle,
   Download,
@@ -17,24 +19,14 @@ import { cn } from '@/lib/utils'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface ApprovedPolicy {
-  Title: string
-  TitleAr: string
-  Version: string
-}
-
-interface ApprovedAssessment {
-  OverallRiskLevel: string
-  OverallRiskScore: number
-}
-
-// ── Constants ──────────────────────────────────────────────────────────────
-
-const RISK_VALUE_COLOR: Record<string, string> = {
-  Low:      'text-emerald-600',
-  Medium:   'text-amber-600',
-  High:     'text-orange-600',
-  Critical: 'text-red-600',
+interface DashboardStats {
+  customers:        { total: number; high_risk: number; critical_risk: number }
+  alerts:           { open: number; under_review: number; escalated: number }
+  str_cases:        { total: number; draft: number; filed_to_fiu: number }
+  screening:        { total_screened: number; pending_review: number; confirmed_hits: number }
+  kyc_requests:     { pending: number }
+  policies:         { approved: number }
+  risk_assessments: { approved: number }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -44,37 +36,16 @@ export default function DashboardPage() {
   const isAr    = language === 'ar'
   const isAdmin = user?.role === 'admin'
 
-  const [loading,    setLoading]    = useState(true)
-  const [custTotal,  setCustTotal]  = useState(0)
-  const [strTotal,   setStrTotal]   = useState(0)
-  const [policy,     setPolicy]     = useState<ApprovedPolicy | null>(null)
-  const [assessment, setAssessment] = useState<ApprovedAssessment | null>(null)
-  const [exporting,  setExporting]  = useState(false)
-  const [exportErr,  setExportErr]  = useState('')
+  const [loading,   setLoading]   = useState(true)
+  const [stats,     setStats]     = useState<DashboardStats | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportErr, setExportErr] = useState('')
 
   useEffect(() => {
-    ;(async () => {
-      try {
-        const [cRes, sRes, pRes, rRes] = await Promise.all([
-          api.get('/customers?page_size=1'),
-          api.get('/str-cases?page_size=1'),
-          api.get('/policies?page_size=50'),
-          api.get('/risk-assessments?page_size=50'),
-        ])
-        setCustTotal(cRes.data.data.total ?? 0)
-        setStrTotal(sRes.data.data.total  ?? 0)
-        setPolicy(
-          (pRes.data.data.items as any[]).find((p: any) => p.Status === 'Approved') ?? null
-        )
-        setAssessment(
-          (rRes.data.data.items as any[]).find((a: any) => a.Status === 'Approved') ?? null
-        )
-      } catch {
-        // silently fall through — stat cards show dashes
-      } finally {
-        setLoading(false)
-      }
-    })()
+    api.get('/dashboard/stats')
+      .then(res => setStats(res.data.data as DashboardStats))
+      .catch(() => { /* silently fall through — cards show dashes */ })
+      .finally(() => setLoading(false))
   }, [])
 
   async function handleExport() {
@@ -97,77 +68,74 @@ export default function DashboardPage() {
     }
   }
 
-  const hasPolicy     = !!policy
-  const hasAssessment = !!assessment
-  const isReady       = hasPolicy && hasAssessment
-  const hasCustomers  = custTotal > 0
-  const hasSTR        = strTotal  > 0
-  const riskLevel     = assessment?.OverallRiskLevel ?? '—'
+  const v = (n: number | undefined) => loading ? '…' : String(n ?? 0)
 
   const statCards = [
     {
       label: 'Total Customers', labelAr: 'إجمالي العملاء',
       icon: Users,
-      value: loading ? '…' : String(custTotal),
-      sub:   isAr ? 'سجلات العناية الواجبة' : 'KYC records',
+      value: v(stats?.customers.total),
+      sub: loading ? '' : (isAr
+        ? `${stats?.customers.high_risk ?? 0} عالي + ${stats?.customers.critical_risk ?? 0} حرج`
+        : `${stats?.customers.high_risk ?? 0} high + ${stats?.customers.critical_risk ?? 0} critical`),
       color: 'bg-blue-50 text-blue-600',
-      valueClass: 'text-slate-900',
+    },
+    {
+      label: 'Open Alerts', labelAr: 'التنبيهات المفتوحة',
+      icon: AlertTriangle,
+      value: v(stats?.alerts.open),
+      sub: loading ? '' : (isAr
+        ? `${stats?.alerts.escalated ?? 0} مصعَّد`
+        : `${stats?.alerts.escalated ?? 0} escalated`),
+      color: 'bg-red-50 text-red-600',
+    },
+    {
+      label: 'Pending KYC Requests', labelAr: 'طلبات التحقق المعلقة',
+      icon: ClipboardList,
+      value: v(stats?.kyc_requests.pending),
+      sub: isAr ? 'بانتظار المراجعة' : 'awaiting review',
+      color: 'bg-amber-50 text-amber-600',
     },
     {
       label: 'STR Cases', labelAr: 'بلاغات الاشتباه',
-      icon: AlertTriangle,
-      value: loading ? '…' : String(strTotal),
-      sub:   isAr ? 'جميع الحالات' : 'All statuses',
-      color: 'bg-amber-50 text-amber-600',
-      valueClass: 'text-slate-900',
-    },
-    {
-      label: 'Active Policy', labelAr: 'السياسة النشطة',
       icon: FileText,
-      value: loading ? '…' : (policy ? `v${policy.Version}` : '—'),
-      sub: loading || !policy
-        ? (isAr ? 'الإصدار المعتمد' : 'Approved version')
-        : (isAr ? policy.TitleAr : policy.Title),
-      color: 'bg-green-50 text-green-600',
-      valueClass: 'text-slate-900',
+      value: v(stats?.str_cases.total),
+      sub: loading ? '' : (isAr
+        ? `${stats?.str_cases.draft ?? 0} مسودة · ${stats?.str_cases.filed_to_fiu ?? 0} مُقدَّم`
+        : `${stats?.str_cases.draft ?? 0} draft · ${stats?.str_cases.filed_to_fiu ?? 0} filed`),
+      color: 'bg-orange-50 text-orange-600',
     },
     {
-      label: 'Risk Level', labelAr: 'مستوى المخاطر',
-      icon: BarChart3,
-      value: loading ? '…' : riskLevel,
-      sub: !loading && assessment
-        ? (isAr
-            ? `النتيجة: ${assessment.OverallRiskScore.toFixed(2)} / 5`
-            : `Score: ${assessment.OverallRiskScore.toFixed(2)} / 5`)
-        : (isAr ? 'التقييم الإجمالي' : 'Overall assessment'),
+      label: 'Screening Hits', labelAr: 'نتائج الفحص',
+      icon: ShieldAlert,
+      value: v(stats?.screening.confirmed_hits),
+      sub: loading ? '' : (isAr
+        ? `${stats?.screening.pending_review ?? 0} قيد المراجعة`
+        : `${stats?.screening.pending_review ?? 0} pending review`),
       color: 'bg-purple-50 text-purple-600',
-      valueClass: !loading && assessment
-        ? (RISK_VALUE_COLOR[riskLevel] ?? 'text-slate-900')
-        : 'text-slate-900',
+    },
+    {
+      label: 'Approved Policies', labelAr: 'السياسات المعتمدة',
+      icon: BarChart3,
+      value: v(stats?.policies.approved),
+      sub: loading ? '' : (isAr
+        ? `${stats?.risk_assessments.approved ?? 0} تقييم معتمد`
+        : `${stats?.risk_assessments.approved ?? 0} risk assessment(s) approved`),
+      color: 'bg-green-50 text-green-600',
     },
   ]
 
+  const hasPolicy     = (stats?.policies.approved        ?? 0) > 0
+  const hasAssessment = (stats?.risk_assessments.approved ?? 0) > 0
+  const hasCustomers  = (stats?.customers.total           ?? 0) > 0
+  const hasSTR        = (stats?.str_cases.total           ?? 0) > 0
+  const isReady       = hasPolicy && hasAssessment
+
   const checklist = [
-    {
-      label:   'AML Policy created and approved',
-      labelAr: 'تم إنشاء سياسة مكافحة غسيل الأموال واعتمادها',
-      done: hasPolicy,
-    },
-    {
-      label:   'Enterprise Risk Assessment completed',
-      labelAr: 'اكتمل تقييم مخاطر المنظمة',
-      done: hasAssessment,
-    },
-    {
-      label:   'KYC customers registered',
-      labelAr: 'تم تسجيل عملاء العناية الواجبة',
-      done: hasCustomers,
-    },
-    {
-      label:   'At least one STR case filed',
-      labelAr: 'تم تقديم بلاغ اشتباه واحد على الأقل',
-      done: hasSTR,
-    },
+    { label: 'AML Policy created and approved',       labelAr: 'تم إنشاء سياسة مكافحة غسيل الأموال واعتمادها', done: hasPolicy },
+    { label: 'Enterprise Risk Assessment completed',  labelAr: 'اكتمل تقييم مخاطر المنظمة',                    done: hasAssessment },
+    { label: 'KYC customers registered',              labelAr: 'تم تسجيل عملاء العناية الواجبة',               done: hasCustomers },
+    { label: 'At least one STR case filed',           labelAr: 'تم تقديم بلاغ اشتباه واحد على الأقل',         done: hasSTR },
   ]
 
   return (
@@ -188,15 +156,15 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stat cards ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        {statCards.map(({ label, labelAr, icon: Icon, value, sub, color, valueClass }) => (
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        {statCards.map(({ label, labelAr, icon: Icon, value, sub, color }) => (
           <div
             key={label}
             className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-5 shadow-sm"
           >
             <div className="min-w-0 flex-1 ltr:pr-3 rtl:pl-3">
               <p className="text-sm text-slate-500">{isAr ? labelAr : label}</p>
-              <p className={cn('mt-1 text-3xl font-bold', valueClass)}>{value}</p>
+              <p className="mt-1 text-3xl font-bold text-slate-900">{value}</p>
               <p className="mt-0.5 truncate text-xs text-slate-400">{sub}</p>
             </div>
             <div className={cn('shrink-0 rounded-xl p-3', color)}>

@@ -12,7 +12,9 @@ import {
   ClipboardList,
   Radar,
   Bell,
+  BellDot,
   SlidersHorizontal,
+  Settings,
   LogOut,
   Menu,
   X,
@@ -70,6 +72,8 @@ const navItems = [
   { label: 'STR Cases',          labelAr: 'بلاغات الاشتباه', href: '/str-cases',         icon: AlertTriangle      },
   { label: 'Policies',        labelAr: 'السياسات',         href: '/policies',         icon: FileText        },
   { label: 'Risk Assessment', labelAr: 'تقييم المخاطر',   href: '/risk-assessment',  icon: BarChart3       },
+  { label: 'Notifications',   labelAr: 'الإشعارات',        href: '/notifications',    icon: BellDot         },
+  { label: 'Settings',        labelAr: 'الإعدادات',        href: '/settings',         icon: Settings        },
 ]
 
 // ── Sidebar (shared between desktop and mobile) ───────────────────────────
@@ -78,6 +82,7 @@ function SidebarContent({
   isAr,
   orgName,
   alertBadge,
+  notifBadge,
   onNavClick,
   onLogout,
 }: {
@@ -85,6 +90,7 @@ function SidebarContent({
   isAr: boolean
   orgName: string
   alertBadge: number
+  notifBadge: number
   onNavClick: () => void
   onLogout: () => void
 }) {
@@ -108,7 +114,9 @@ function SidebarContent({
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
         {navItems.map(({ label, labelAr, href, icon: Icon }) => {
           const active = pathname === href || (href.length > 1 && pathname.startsWith(href + '/'))
-          const badge  = href === '/alerts' && alertBadge > 0 ? alertBadge : 0
+          const badge  =
+            href === '/alerts'        && alertBadge > 0 ? alertBadge :
+            href === '/notifications' && notifBadge  > 0 ? notifBadge : 0
           return (
             <Link
               key={href}
@@ -149,9 +157,10 @@ function SidebarContent({
 
 // ── Dashboard Layout ───────────────────────────────────────────────────────
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const [mounted, setMounted]           = useState(false)
-  const [sidebarOpen, setSidebarOpen]   = useState(false)
+  const [mounted, setMounted]               = useState(false)
+  const [sidebarOpen, setSidebarOpen]       = useState(false)
   const [openAlertCount, setOpenAlertCount] = useState(0)
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0)
 
   const { token, user, org, language, logout, setLanguage } = useAuthStore()
   const router   = useRouter()
@@ -166,7 +175,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (!mounted || !token) return
     api.get('/alerts?status=open&page_size=1')
       .then(res => setOpenAlertCount(res.data?.data?.stats?.open ?? 0))
-      .catch(() => { /* non-critical — badge stays at 0 on error */ })
+      .catch(() => { /* non-critical */ })
+  }, [mounted, token])
+
+  // Poll unread notification count every 30 s for the sidebar badge.
+  useEffect(() => {
+    if (!mounted || !token) return
+    const fetch = () =>
+      api.get('/notifications/unread-count')
+        .then(res => setUnreadNotifCount(res.data?.data?.unread_count ?? 0))
+        .catch(() => { /* non-critical */ })
+    fetch()
+    const id = setInterval(fetch, 30_000)
+    return () => clearInterval(id)
   }, [mounted, token])
 
   useEffect(() => {
@@ -236,6 +257,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           isAr={isAr}
           orgName={orgLabel}
           alertBadge={openAlertCount}
+          notifBadge={unreadNotifCount}
           onNavClick={() => setSidebarOpen(false)}
           onLogout={handleLogout}
         />
