@@ -20,6 +20,10 @@ import {
   X,
   Shield,
   CheckCheck,
+  UserCircle,
+  Eye,
+  EyeOff,
+  Loader2,
 } from 'lucide-react'
 import useAuthStore from '@/store/authStore'
 import api from '@/lib/axios'
@@ -161,6 +165,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [sidebarOpen, setSidebarOpen]       = useState(false)
   const [openAlertCount, setOpenAlertCount] = useState(0)
   const [unreadNotifCount, setUnreadNotifCount] = useState(0)
+  const [profileOpen, setProfileOpen]       = useState(false)
 
   const { token, user, org, language, logout, setLanguage } = useAuthStore()
   const router   = useRouter()
@@ -295,10 +300,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           {/* User info + logout */}
           <div className="flex items-center gap-3">
-            <div className="hidden flex-col items-end sm:flex rtl:items-start">
+            <button
+              onClick={() => setProfileOpen(true)}
+              className="hidden flex-col items-end sm:flex rtl:items-start rounded-lg px-2 py-1 transition hover:bg-slate-50"
+              title={isAr ? 'الملف الشخصي' : 'My Profile'}
+            >
               <span className="text-sm font-medium text-slate-800">{user?.email}</span>
-              <span className="text-xs capitalize text-slate-400">{user?.role}</span>
-            </div>
+              <span className="text-xs capitalize text-indigo-500 hover:underline">{user?.role}</span>
+            </button>
+            <button
+              onClick={() => setProfileOpen(true)}
+              className="flex sm:hidden rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
+              aria-label={isAr ? 'الملف الشخصي' : 'My Profile'}
+            >
+              <UserCircle className="h-5 w-5" />
+            </button>
 
             <div className="h-8 w-px bg-slate-200" />
 
@@ -319,6 +335,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+
+      {/* Profile modal */}
+      {profileOpen && (
+        <ProfileModal
+          isAr={isAr}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -530,6 +554,205 @@ function NotificationBell({ isAr }: { isAr: boolean }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── ProfileModal ────────────────────────────────────────────────────────────
+
+function ProfileModal({ isAr, onClose }: { isAr: boolean; onClose: () => void }) {
+  const { token, user, org, login } = useAuthStore()
+
+  const [fullName,         setFullName]         = useState('')
+  const [currentPassword,  setCurrentPassword]  = useState('')
+  const [newPassword,      setNewPassword]       = useState('')
+  const [confirmPassword,  setConfirmPassword]   = useState('')
+  const [showPass,         setShowPass]          = useState(false)
+  const [saving,           setSaving]            = useState(false)
+  const [error,            setError]             = useState('')
+  const [success,          setSuccess]           = useState(false)
+
+  // Load current full name from /me on open
+  useEffect(() => {
+    api.get('/me').then(res => {
+      setFullName(res.data?.data?.user?.full_name ?? '')
+    }).catch(() => { /* proceed with empty */ })
+  }, [])
+
+  const hasPasswordChange = !!newPassword
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (hasPasswordChange && newPassword !== confirmPassword) {
+      setError(isAr ? 'كلمتا المرور غير متطابقتين.' : 'New passwords do not match.')
+      return
+    }
+    if (hasPasswordChange && !currentPassword) {
+      setError(isAr ? 'أدخل كلمة المرور الحالية.' : 'Enter your current password.')
+      return
+    }
+    setError('')
+    setSaving(true)
+    try {
+      const body: Record<string, string> = {}
+      if (fullName)        body.full_name        = fullName
+      if (hasPasswordChange) {
+        body.current_password = currentPassword
+        body.new_password     = newPassword
+      }
+      const { data } = await api.patch('/me', body)
+      // Update the in-memory user name if token + org are available
+      if (token && user && org) {
+        login(token, { ...user, email: data.data?.email ?? user.email }, org)
+      }
+      setSuccess(true)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setTimeout(() => setSuccess(false), 3000)
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } }).response?.status
+      if (status === 401) {
+        setError(isAr ? 'كلمة المرور الحالية غير صحيحة.' : 'Current password is incorrect.')
+      } else {
+        setError(isAr ? 'فشل الحفظ. حاول مرة أخرى.' : 'Save failed. Please try again.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div className="flex items-center gap-2">
+            <UserCircle className="h-5 w-5 text-indigo-500" />
+            <h2 className="text-base font-semibold text-slate-900">
+              {isAr ? 'الملف الشخصي' : 'My Profile'}
+            </h2>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSave} className="space-y-4 p-6">
+
+          {/* Email — read only */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
+              {isAr ? 'البريد الإلكتروني' : 'Email address'}
+            </label>
+            <input
+              value={user?.email ?? ''}
+              readOnly
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-500 cursor-default"
+            />
+          </div>
+
+          {/* Full name */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
+              {isAr ? 'الاسم الكامل' : 'Full name'}
+            </label>
+            <input
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder={isAr ? 'اسمك الكامل' : 'Your full name'}
+              className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20"
+            />
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              {isAr ? 'تغيير كلمة المرور (اختياري)' : 'Change password (optional)'}
+            </p>
+
+            {/* Current password */}
+            <div className="mb-3">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                {isAr ? 'كلمة المرور الحالية' : 'Current password'}
+              </label>
+              <div className="relative">
+                <input
+                  type={showPass ? 'text' : 'password'}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20 pe-10"
+                />
+                <button type="button" onClick={() => setShowPass(v => !v)}
+                  className="absolute inset-y-0 end-0 flex items-center pe-3 text-slate-400 hover:text-slate-600" tabIndex={-1}>
+                  {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* New password */}
+            <div className="mb-3">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                {isAr ? 'كلمة المرور الجديدة' : 'New password'}
+              </label>
+              <input
+                type={showPass ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="••••••••"
+                minLength={8}
+                className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20"
+              />
+            </div>
+
+            {/* Confirm password */}
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                {isAr ? 'تأكيد كلمة المرور الجديدة' : 'Confirm new password'}
+              </label>
+              <input
+                type={showPass ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 ring-1 ring-red-100">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-700 ring-1 ring-emerald-100">
+              {isAr ? 'تم الحفظ بنجاح.' : 'Saved successfully.'}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              {isAr ? 'إغلاق' : 'Close'}
+            </button>
+            <button
+              type="submit"
+              disabled={saving || (!fullName && !newPassword)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isAr ? 'حفظ' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }

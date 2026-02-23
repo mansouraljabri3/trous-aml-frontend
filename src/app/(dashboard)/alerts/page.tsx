@@ -1,10 +1,12 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import {
   ArrowUpRight,
   Bell,
   CheckCircle2,
+  ExternalLink,
   Loader2,
   ShieldAlert,
   UserCheck,
@@ -602,9 +604,19 @@ export default function AlertsPage() {
               {/* ── Customer ─────────────────────────────────────────────── */}
               {selected.Customer && (
                 <section>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    {isAr ? 'العميل' : 'Customer'}
-                  </p>
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      {isAr ? 'العميل' : 'Customer'}
+                    </p>
+                    <Link
+                      href="/customers"
+                      onClick={() => {/* closes modal implicitly via navigation */}}
+                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      {isAr ? 'عرض في العملاء' : 'View in Customers'}
+                    </Link>
+                  </div>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2">
                     <DRow label={isAr ? 'الاسم'       : 'Name'}>
                       {customerName(selected)}
