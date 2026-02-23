@@ -13,6 +13,11 @@ import {
   X,
   Receipt,
   ArrowUpDown,
+  Network,
+  CheckCircle2,
+  AlertCircle,
+  Trash2,
+  ScanSearch,
 } from 'lucide-react'
 import api from '@/lib/axios'
 import useAuthStore from '@/store/authStore'
@@ -43,13 +48,45 @@ type TxType   = 'deposit' | 'withdrawal' | 'transfer' | 'payment'
 interface Transaction {
   ID:        number
   CreatedAt: string
-  Amount:    number
+  Amount:    string
   Currency:  string
   TxType:    TxType
   TxDate:    string
   Status:    TxStatus
   Reference: string
   Notes:     string
+}
+
+interface BeneficialOwner {
+  ID:                      number
+  CreatedAt:               string
+  OrgID:                   number
+  CustomerID:              number
+  FullName:                string
+  NationalID:              string
+  Nationality:             string
+  OwnershipPercentage:     number
+  ControlType:             string
+  IsPEP:                   boolean
+  PEPStatus:               string | null
+  SanctionsStatus:         string | null
+  RelationshipDescription: string
+  DocumentsVerified:       boolean
+}
+
+const CONTROL_TYPES = [
+  'direct_ownership',
+  'indirect_ownership',
+  'control_through_agreement',
+  'other',
+] as const
+type ControlType = typeof CONTROL_TYPES[number]
+
+const CONTROL_TYPE_LABEL: Record<ControlType, { en: string; ar: string }> = {
+  direct_ownership:           { en: 'Direct Ownership',      ar: 'ملكية مباشرة' },
+  indirect_ownership:         { en: 'Indirect Ownership',    ar: 'ملكية غير مباشرة' },
+  control_through_agreement:  { en: 'Control via Agreement', ar: 'سيطرة بموجب اتفاقية' },
+  other:                      { en: 'Other',                 ar: 'أخرى' },
 }
 
 const TX_STATUS_BADGE: Record<TxStatus, string> = {
@@ -353,6 +390,7 @@ export default function CustomersPage() {
   const [saving, setSaving]           = useState(false)
   const [saveErr, setSaveErr]         = useState('')
   const [txnCustomer, setTxnCustomer] = useState<Customer | null>(null)
+  const [uboCustomer, setUboCustomer] = useState<Customer | null>(null)
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -671,6 +709,19 @@ export default function CustomersPage() {
                           <Receipt className="h-3 w-3" />
                           {isAr ? 'معاملات' : 'Txns'}
                         </button>
+                        {c.CustomerType === 'corporate' && (
+                          <button
+                            onClick={() => setUboCustomer(c)}
+                            className={cn(
+                              'flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1',
+                              'text-xs font-medium text-slate-600 transition',
+                              'hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700',
+                            )}
+                          >
+                            <Network className="h-3 w-3" />
+                            {isAr ? 'المستفيدون' : 'UBOs'}
+                          </button>
+                        )}
                       </div>
                     </td>
 
@@ -730,6 +781,15 @@ export default function CustomersPage() {
           isAr={isAr}
           customer={txnCustomer}
           onClose={() => setTxnCustomer(null)}
+        />
+      )}
+
+      {/* ── UBO modal (corporate only) ───────────────────────────────────── */}
+      {uboCustomer && (
+        <UBOsModal
+          isAr={isAr}
+          customer={uboCustomer}
+          onClose={() => setUboCustomer(null)}
         />
       )}
 
@@ -1208,8 +1268,8 @@ function TransactionsModal({ isAr, customer, onClose }: {
     }
   }
 
-  const formatAmount = (n: number, cur: string) =>
-    new Intl.NumberFormat(isAr ? 'ar-SA' : 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) + ' ' + cur
+  const formatAmount = (n: string, cur: string) =>
+    new Intl.NumberFormat(isAr ? 'ar-SA' : 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parseFloat(n)) + ' ' + cur
 
   return (
     <div
@@ -1450,6 +1510,543 @@ function TransactionsModal({ isAr, customer, onClose }: {
           )}
         </div>
 
+      </div>
+    </div>
+  )
+}
+
+// ── UBOsModal ──────────────────────────────────────────────────────────────
+
+function UBOsModal({ isAr, customer, onClose }: {
+  isAr: boolean
+  customer: Customer
+  onClose: () => void
+}) {
+  const custName = customer.CompanyName || `#${customer.ID}`
+
+  const [ubos, setUbos]           = useState<BeneficialOwner[]>([])
+  const [totalOwn, setTotalOwn]   = useState(0)
+  const [loading, setLoading]     = useState(true)
+  const [err, setErr]             = useState(false)
+  const [addOpen, setAddOpen]     = useState(false)
+  const [editUBO, setEditUBO]     = useState<BeneficialOwner | null>(null)
+  const [screening, setScreening] = useState<number | null>(null) // UBO ID being screened
+  const [screenErr, setScreenErr] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setErr(false)
+    try {
+      const { data } = await api.get(`/customers/${customer.ID}/beneficial-owners`)
+      const items = (data.data.items ?? []) as BeneficialOwner[]
+      setUbos(items)
+      setTotalOwn(data.data.total_ownership_pct ?? items.reduce((s, u) => s + u.OwnershipPercentage, 0))
+    } catch {
+      setErr(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [customer.ID])
+
+  useEffect(() => { load() }, [load])
+
+  const handleScreen = async (ubo: BeneficialOwner) => {
+    setScreening(ubo.ID)
+    setScreenErr('')
+    try {
+      await api.post(`/beneficial-owners/${ubo.ID}/screen`)
+      load()
+    } catch {
+      setScreenErr(isAr ? 'فشل الفحص. حاول مرة أخرى.' : 'Screening failed. Please try again.')
+    } finally {
+      setScreening(null)
+    }
+  }
+
+  const handleDelete = async (ubo: BeneficialOwner) => {
+    if (!confirm(isAr
+      ? `هل تريد حذف ${ubo.FullName}؟`
+      : `Delete ${ubo.FullName}?`)) return
+    try {
+      await api.delete(`/beneficial-owners/${ubo.ID}`)
+      load()
+    } catch {
+      // swallow — non-critical
+    }
+  }
+
+  const statusDot = (status: string | null) => {
+    if (!status || status === 'clear') return <span className="text-emerald-600 text-xs">✓</span>
+    if (status === 'hit') return <span className="text-red-600 text-xs font-bold">!</span>
+    return <span className="text-amber-500 text-xs">~</span>
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div className="flex items-center gap-2.5">
+            <Network className="h-4 w-4 text-purple-600" />
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">
+                {isAr ? 'المستفيدون الحقيقيون' : 'Beneficial Owners (UBOs)'}
+              </h3>
+              <p className="mt-0.5 text-xs text-slate-400">{custName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setEditUBO(null); setAddOpen(true) }}
+              className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 transition hover:bg-purple-100"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {isAr ? 'إضافة مستفيد' : 'Add UBO'}
+            </button>
+            <button onClick={onClose}
+              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Ownership % summary bar */}
+        <div className={cn(
+          'flex items-center gap-2 px-6 py-2.5 text-xs font-medium',
+          totalOwn >= 100
+            ? 'bg-emerald-50 text-emerald-700'
+            : totalOwn > 0
+              ? 'bg-amber-50 text-amber-700'
+              : 'bg-slate-50 text-slate-500',
+        )}>
+          {totalOwn >= 100
+            ? <CheckCircle2 className="h-3.5 w-3.5" />
+            : <AlertCircle className="h-3.5 w-3.5" />}
+          {isAr
+            ? `إجمالي الملكية: ${totalOwn.toFixed(1)}٪ ${totalOwn < 100 ? '— لم يتم الإفصاح عن 100٪ بعد' : ''}`
+            : `Total ownership disclosed: ${totalOwn.toFixed(1)}% ${totalOwn < 100 ? '— not yet 100%' : ''}`}
+        </div>
+
+        {screenErr && (
+          <div className="mx-6 mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-200">
+            {screenErr}
+          </div>
+        )}
+
+        <div className="max-h-[60vh] overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-purple-400" />
+            </div>
+          ) : err ? (
+            <div className="px-6 py-8 text-center text-sm text-red-500">
+              {isAr ? 'فشل تحميل المستفيدين.' : 'Failed to load beneficial owners.'}
+            </div>
+          ) : ubos.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+              <Network className="h-8 w-8 text-slate-200" />
+              <p className="text-sm text-slate-500">
+                {isAr ? 'لم يُضَف أي مستفيد حقيقي بعد' : 'No beneficial owners added yet'}
+              </p>
+              <p className="text-xs text-slate-400">
+                {isAr
+                  ? 'يُلزم نظام مكافحة غسل الأموال بالإفصاح عن كل من يملك 25٪ أو أكثر أو يمارس سيطرة فعلية.'
+                  : 'SAMA requires disclosure of all persons holding ≥25% or exercising effective control.'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wider text-slate-400 rtl:text-right">
+                  <tr>
+                    <th className="px-4 py-3">{isAr ? 'الاسم'     : 'Name'}</th>
+                    <th className="px-4 py-3">{isAr ? 'الهوية'    : 'NID'}</th>
+                    <th className="px-4 py-3 text-right rtl:text-left">{isAr ? 'الملكية' : 'Own%'}</th>
+                    <th className="hidden px-4 py-3 md:table-cell">{isAr ? 'نوع السيطرة' : 'Control'}</th>
+                    <th className="px-4 py-3">{isAr ? 'العقوبات / PEP' : 'Sanctions/PEP'}</th>
+                    <th className="px-4 py-3">{isAr ? 'إجراء' : 'Action'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {ubos.map((u) => (
+                    <tr key={u.ID} className="group hover:bg-slate-50/60">
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-slate-800">{u.FullName}</p>
+                        {u.IsPEP && (
+                          <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">PEP</span>
+                        )}
+                        {u.DocumentsVerified && (
+                          <span className="mt-0.5 ml-1 inline-block rounded-full bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
+                            {isAr ? 'موثق' : 'Verified'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{u.NationalID}</td>
+                      <td className="px-4 py-3 text-right font-medium text-slate-700 rtl:text-left">
+                        {u.OwnershipPercentage.toFixed(1)}%
+                      </td>
+                      <td className="hidden px-4 py-3 text-xs text-slate-500 md:table-cell">
+                        {CONTROL_TYPE_LABEL[u.ControlType as ControlType]?.[isAr ? 'ar' : 'en'] ?? u.ControlType}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-0.5 text-xs">
+                            {statusDot(u.SanctionsStatus)}
+                            <span className="text-slate-400">{isAr ? 'عقوبات' : 'Sanc'}</span>
+                          </span>
+                          <span className="flex items-center gap-0.5 text-xs">
+                            {statusDot(u.PEPStatus)}
+                            <span className="text-slate-400">PEP</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                          <button
+                            onClick={() => { setEditUBO(u); setAddOpen(true) }}
+                            className="rounded p-1 text-slate-400 transition hover:bg-indigo-50 hover:text-indigo-600"
+                            title={isAr ? 'تعديل' : 'Edit'}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleScreen(u)}
+                            disabled={screening === u.ID}
+                            className="rounded p-1 text-slate-400 transition hover:bg-purple-50 hover:text-purple-600 disabled:opacity-50"
+                            title={isAr ? 'فحص' : 'Screen'}
+                          >
+                            {screening === u.ID
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <ScanSearch className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(u)}
+                            className="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                            title={isAr ? 'حذف' : 'Delete'}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Add / Edit UBO modal */}
+      {addOpen && (
+        <AddEditUBOModal
+          isAr={isAr}
+          customerID={customer.ID}
+          editing={editUBO}
+          onClose={() => { setAddOpen(false); setEditUBO(null) }}
+          onSaved={() => { setAddOpen(false); setEditUBO(null); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── AddEditUBOModal ─────────────────────────────────────────────────────────
+
+interface UBOFormState {
+  fullName:                string
+  nationalID:              string
+  nationality:             string
+  ownershipPercentage:     string
+  controlType:             ControlType
+  isPEP:                   boolean
+  relationshipDescription: string
+  documentsVerified:       boolean
+}
+
+const EMPTY_UBO_FORM: UBOFormState = {
+  fullName:                '',
+  nationalID:              '',
+  nationality:             'SA',
+  ownershipPercentage:     '',
+  controlType:             'direct_ownership',
+  isPEP:                   false,
+  relationshipDescription: '',
+  documentsVerified:       false,
+}
+
+function AddEditUBOModal({ isAr, customerID, editing, onClose, onSaved }: {
+  isAr:       boolean
+  customerID: number
+  editing:    BeneficialOwner | null
+  onClose:    () => void
+  onSaved:    () => void
+}) {
+  const isEdit = !!editing
+  const [form, setForm]   = useState<UBOFormState>(() => editing ? {
+    fullName:                editing.FullName,
+    nationalID:              editing.NationalID,
+    nationality:             editing.Nationality,
+    ownershipPercentage:     String(editing.OwnershipPercentage),
+    controlType:             editing.ControlType as ControlType,
+    isPEP:                   editing.IsPEP,
+    relationshipDescription: editing.RelationshipDescription ?? '',
+    documentsVerified:       editing.DocumentsVerified,
+  } : EMPTY_UBO_FORM)
+  const [saving, setSaving] = useState(false)
+  const [saveErr, setSaveErr] = useState('')
+
+  const set = <K extends keyof UBOFormState>(key: K, val: UBOFormState[K]) =>
+    setForm((prev) => ({ ...prev, [key]: val }))
+
+  const nidErr = validateSaudiID(form.nationalID, isAr)
+  const pctVal = parseFloat(form.ownershipPercentage)
+  const pctErr = form.ownershipPercentage && (isNaN(pctVal) || pctVal < 0 || pctVal > 100)
+    ? (isAr ? 'يجب أن تكون النسبة بين 0 و100' : 'Must be between 0 and 100')
+    : ''
+
+  const isDisabled = saving
+    || !form.fullName.trim()
+    || !form.nationalID.trim()
+    || !!nidErr
+    || !form.ownershipPercentage
+    || !!pctErr
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveErr('')
+    try {
+      const body = {
+        full_name:                form.fullName.trim(),
+        national_id:              form.nationalID.trim(),
+        nationality:              form.nationality,
+        ownership_percentage:     pctVal,
+        control_type:             form.controlType,
+        is_pep:                   form.isPEP,
+        relationship_description: form.relationshipDescription.trim(),
+        documents_verified:       form.documentsVerified,
+      }
+      if (isEdit) {
+        await api.put(`/beneficial-owners/${editing!.ID}`, body)
+      } else {
+        await api.post(`/customers/${customerID}/beneficial-owners`, body)
+      }
+      onSaved()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } }).response?.data?.error
+      setSaveErr(msg ?? (isAr ? 'فشل حفظ بيانات المستفيد.' : 'Failed to save beneficial owner.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-4 sm:items-center"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+          <h3 className="text-base font-semibold text-slate-900">
+            {isEdit
+              ? (isAr ? 'تعديل بيانات المستفيد' : 'Edit Beneficial Owner')
+              : (isAr ? 'إضافة مستفيد حقيقي'    : 'Add Beneficial Owner')}
+          </h3>
+          <button onClick={onClose} disabled={saving}
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
+
+          {/* Full Name */}
+          <ModalField label={isAr ? 'الاسم الكامل *' : 'Full Legal Name *'} id="ubo_full_name">
+            <input
+              id="ubo_full_name"
+              type="text"
+              value={form.fullName}
+              onChange={(e) => set('fullName', e.target.value)}
+              placeholder={isAr ? 'كما يظهر في الهوية' : 'As it appears on ID'}
+              disabled={saving}
+              className={inputCls}
+            />
+          </ModalField>
+
+          {/* National ID */}
+          <ModalField label={isAr ? 'رقم الهوية الوطنية / الإقامة *' : 'National ID / Iqama No. *'} id="ubo_national_id">
+            <input
+              id="ubo_national_id"
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              value={form.nationalID}
+              onChange={(e) => set('nationalID', e.target.value.replace(/\D/g, ''))}
+              placeholder="e.g. 1234567890"
+              disabled={saving}
+              className={cn(inputCls, nidErr && form.nationalID && 'border-red-400 focus:border-red-400 focus:ring-red-400/20')}
+            />
+            {nidErr && form.nationalID && (
+              <p className="mt-1 text-xs text-red-500">{nidErr}</p>
+            )}
+          </ModalField>
+
+          {/* Nationality */}
+          <ModalField label={isAr ? 'الجنسية *' : 'Nationality *'} id="ubo_nationality">
+            <select
+              id="ubo_nationality"
+              value={form.nationality}
+              onChange={(e) => set('nationality', e.target.value)}
+              disabled={saving}
+              className={cn(inputCls, 'cursor-pointer')}
+            >
+              {COUNTRIES.map(({ code, name, nameAr }) => (
+                <option key={code} value={code}>
+                  {isAr ? nameAr : name} ({code})
+                </option>
+              ))}
+            </select>
+          </ModalField>
+
+          {/* Ownership % */}
+          <ModalField label={isAr ? 'نسبة الملكية (%) *' : 'Ownership Percentage (%) *'} id="ubo_ownership">
+            <input
+              id="ubo_ownership"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={form.ownershipPercentage}
+              onChange={(e) => set('ownershipPercentage', e.target.value)}
+              placeholder="e.g. 30.00"
+              disabled={saving}
+              className={cn(inputCls, pctErr && 'border-red-400 focus:border-red-400 focus:ring-red-400/20')}
+            />
+            {pctErr && <p className="mt-1 text-xs text-red-500">{pctErr}</p>}
+          </ModalField>
+
+          {/* Control Type */}
+          <ModalField label={isAr ? 'نوع السيطرة *' : 'Control Type *'} id="ubo_control_type">
+            <select
+              id="ubo_control_type"
+              value={form.controlType}
+              onChange={(e) => set('controlType', e.target.value as ControlType)}
+              disabled={saving}
+              className={cn(inputCls, 'cursor-pointer')}
+            >
+              {CONTROL_TYPES.map((ct) => (
+                <option key={ct} value={ct}>
+                  {CONTROL_TYPE_LABEL[ct][isAr ? 'ar' : 'en']}
+                </option>
+              ))}
+            </select>
+          </ModalField>
+
+          {/* Relationship Description */}
+          <ModalField label={isAr ? 'وصف العلاقة' : 'Relationship Description'} id="ubo_rel">
+            <input
+              id="ubo_rel"
+              type="text"
+              value={form.relationshipDescription}
+              onChange={(e) => set('relationshipDescription', e.target.value)}
+              placeholder={isAr ? 'اختياري' : 'Optional'}
+              disabled={saving}
+              maxLength={2000}
+              className={inputCls}
+            />
+          </ModalField>
+
+          {/* IsPEP toggle */}
+          <button
+            type="button"
+            onClick={() => set('isPEP', !form.isPEP)}
+            disabled={saving}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left rtl:text-right transition',
+              form.isPEP ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white hover:border-slate-300',
+            )}
+          >
+            <div className={cn(
+              'flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition',
+              form.isPEP ? 'border-amber-500 bg-amber-500' : 'border-slate-300 bg-white',
+            )}>
+              {form.isPEP && (
+                <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </div>
+            <div>
+              <p className={cn('text-sm font-medium', form.isPEP ? 'text-amber-800' : 'text-slate-700')}>
+                {isAr ? 'شخص مُعرَّض سياسياً (PEP)' : 'Politically Exposed Person (PEP)'}
+              </p>
+              <p className={cn('text-xs', form.isPEP ? 'text-amber-500' : 'text-slate-400')}>
+                {isAr ? 'يشغل أو شغل منصباً حكومياً بارزاً' : 'Holds or has held a prominent public position'}
+              </p>
+            </div>
+          </button>
+
+          {/* DocumentsVerified toggle */}
+          <button
+            type="button"
+            onClick={() => set('documentsVerified', !form.documentsVerified)}
+            disabled={saving}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left rtl:text-right transition',
+              form.documentsVerified ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:border-slate-300',
+            )}
+          >
+            <div className={cn(
+              'flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition',
+              form.documentsVerified ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-white',
+            )}>
+              {form.documentsVerified && (
+                <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </div>
+            <div>
+              <p className={cn('text-sm font-medium', form.documentsVerified ? 'text-emerald-800' : 'text-slate-700')}>
+                {isAr ? 'تم التحقق من الوثائق' : 'Documents Verified'}
+              </p>
+              <p className={cn('text-xs', form.documentsVerified ? 'text-emerald-500' : 'text-slate-400')}>
+                {isAr ? 'تم مراجعة وثائق الهوية والملكية' : 'Identity and ownership documents reviewed'}
+              </p>
+            </div>
+          </button>
+
+          {saveErr && (
+            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 ring-1 ring-red-200">
+              {saveErr}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 border-t border-slate-100 px-6 py-4">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1 rounded-lg border border-slate-200 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {isAr ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isDisabled}
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-purple-600 py-2.5 text-sm font-semibold text-white transition hover:bg-purple-500 disabled:opacity-50"
+          >
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {isEdit ? (isAr ? 'حفظ التغييرات' : 'Save Changes') : (isAr ? 'إضافة المستفيد' : 'Add UBO')}
+          </button>
+        </div>
       </div>
     </div>
   )

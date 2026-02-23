@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -17,10 +17,47 @@ import {
   Menu,
   X,
   Shield,
+  CheckCheck,
 } from 'lucide-react'
 import useAuthStore from '@/store/authStore'
 import api from '@/lib/axios'
 import { cn, parseJWT } from '@/lib/utils'
+
+// ── Notification types ─────────────────────────────────────────────────────
+
+interface AppNotification {
+  ID:                 number
+  CreatedAt:          string
+  Title:              string
+  TitleAr:            string
+  Message:            string
+  MessageAr:          string
+  NotificationType:   string
+  EntityType:         string
+  EntityID:           number
+  IsRead:             boolean
+  ReadAt:             string | null
+}
+
+// Maps entity_type → dashboard route
+const ENTITY_ROUTE: Record<string, string> = {
+  alert:             '/alerts',
+  kyc_request:       '/kyc-requests',
+  str_case:          '/str-cases',
+  customer:          '/customers',
+  policy:            '/policies',
+  screening_result:  '/screening',
+  beneficial_owner:  '/customers',
+}
+
+const NOTIF_TYPE_ICON: Record<string, string> = {
+  alert:            '🚨',
+  kyc_pending:      '📋',
+  str_update:       '📁',
+  screening_hit:    '⚠️',
+  review_due:       '🔍',
+  policy_approval:  '📜',
+}
 
 // ── Navigation items ───────────────────────────────────────────────────────
 const navItems = [
@@ -231,6 +268,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span>{language === 'ar' ? 'EN' : 'عربي'}</span>
           </button>
 
+          {/* Notification bell */}
+          <NotificationBell isAr={isAr} />
+
           {/* User info + logout */}
           <div className="flex items-center gap-3">
             <div className="hidden flex-col items-end sm:flex rtl:items-start">
@@ -257,6 +297,217 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+    </div>
+  )
+}
+
+// ── NotificationBell ───────────────────────────────────────────────────────
+
+function NotificationBell({ isAr }: { isAr: boolean }) {
+  const router = useRouter()
+  const [open, setOpen]                     = useState(false)
+  const [unreadCount, setUnreadCount]       = useState(0)
+  const [notifications, setNotifications]   = useState<AppNotification[]>([])
+  const [loading, setLoading]               = useState(false)
+  const [markingAll, setMarkingAll]         = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // ── Poll unread count every 30 s ────────────────────────────────────────
+  const fetchCount = useCallback(async () => {
+    try {
+      const { data } = await api.get('/notifications/unread-count')
+      setUnreadCount(data.data?.unread_count ?? 0)
+    } catch {
+      // non-critical — badge stays at previous value
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchCount()
+    const id = setInterval(fetchCount, 30_000)
+    return () => clearInterval(id)
+  }, [fetchCount])
+
+  // ── Load recent notifications when panel opens ───────────────────────────
+  const loadNotifications = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await api.get('/notifications?page_size=15')
+      setNotifications((data.data?.items ?? []) as AppNotification[])
+    } catch {
+      // swallow
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) loadNotifications()
+  }, [open, loadNotifications])
+
+  // ── Close on outside click ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!open) return
+    const handle = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [open])
+
+  // ── Mark single notification as read + navigate ──────────────────────────
+  const handleNotifClick = async (n: AppNotification) => {
+    setOpen(false)
+    if (!n.IsRead) {
+      try {
+        await api.patch(`/notifications/${n.ID}/read`)
+        setUnreadCount((c) => Math.max(0, c - 1))
+      } catch { /* best-effort */ }
+    }
+    const route = ENTITY_ROUTE[n.EntityType] ?? '/dashboard'
+    router.push(route)
+  }
+
+  // ── Mark all as read ─────────────────────────────────────────────────────
+  const handleMarkAll = async () => {
+    setMarkingAll(true)
+    try {
+      await api.post('/notifications/mark-all-read')
+      setUnreadCount(0)
+      setNotifications((prev) => prev.map((n) => ({ ...n, IsRead: true })))
+    } catch { /* best-effort */ } finally {
+      setMarkingAll(false)
+    }
+  }
+
+  const timeAgo = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins = Math.floor(diff / 60_000)
+    if (mins < 1)  return isAr ? 'الآن'         : 'just now'
+    if (mins < 60) return isAr ? `منذ ${mins}د` : `${mins}m ago`
+    const hrs = Math.floor(mins / 60)
+    if (hrs  < 24) return isAr ? `منذ ${hrs}س`  : `${hrs}h ago`
+    const days = Math.floor(hrs / 24)
+    return isAr ? `منذ ${days}ي` : `${days}d ago`
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      {/* Bell button */}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'relative flex h-9 w-9 items-center justify-center rounded-lg transition',
+          open ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700',
+        )}
+        aria-label={isAr ? 'الإشعارات' : 'Notifications'}
+      >
+        <Bell className="h-5 w-5" />
+        {unreadCount > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div className={cn(
+          'absolute top-11 z-50 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl',
+          isAr ? 'left-0' : 'right-0',
+        )}>
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h3 className="text-sm font-semibold text-slate-800">
+              {isAr ? 'الإشعارات' : 'Notifications'}
+              {unreadCount > 0 && (
+                <span className="ml-2 rounded-full bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-600">
+                  {unreadCount}
+                </span>
+              )}
+            </h3>
+            {unreadCount > 0 && (
+              <button
+                onClick={handleMarkAll}
+                disabled={markingAll}
+                className="flex items-center gap-1 text-xs text-indigo-600 transition hover:text-indigo-800 disabled:opacity-50"
+              >
+                <CheckCheck className="h-3.5 w-3.5" />
+                {isAr ? 'قراءة الكل' : 'Mark all read'}
+              </button>
+            )}
+          </div>
+
+          {/* List */}
+          <div className="max-h-[26rem] overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center py-10">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-10 text-center">
+                <Bell className="h-7 w-7 text-slate-200" />
+                <p className="text-sm text-slate-400">
+                  {isAr ? 'لا توجد إشعارات' : 'No notifications yet'}
+                </p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-slate-50">
+                {notifications.map((n) => (
+                  <li key={n.ID}>
+                    <button
+                      onClick={() => handleNotifClick(n)}
+                      className={cn(
+                        'flex w-full items-start gap-3 px-4 py-3 text-left rtl:text-right transition hover:bg-slate-50',
+                        !n.IsRead && 'bg-indigo-50/50',
+                      )}
+                    >
+                      {/* Type icon */}
+                      <span className="mt-0.5 shrink-0 text-base leading-none">
+                        {NOTIF_TYPE_ICON[n.NotificationType] ?? '🔔'}
+                      </span>
+
+                      <div className="min-w-0 flex-1">
+                        <p className={cn(
+                          'truncate text-xs',
+                          n.IsRead ? 'font-normal text-slate-600' : 'font-semibold text-slate-800',
+                        )}>
+                          {isAr ? n.TitleAr : n.Title}
+                        </p>
+                        <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">
+                          {isAr ? n.MessageAr : n.Message}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-300">
+                          {timeAgo(n.CreatedAt)}
+                        </p>
+                      </div>
+
+                      {/* Unread dot */}
+                      {!n.IsRead && (
+                        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-indigo-500" />
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Footer */}
+          {notifications.length > 0 && (
+            <div className="border-t border-slate-100 px-4 py-2.5 text-center">
+              <button
+                onClick={() => { setOpen(false); router.push('/notifications') }}
+                className="text-xs text-indigo-600 transition hover:text-indigo-800"
+              >
+                {isAr ? 'عرض جميع الإشعارات' : 'View all notifications'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
